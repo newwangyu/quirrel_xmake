@@ -38,8 +38,10 @@ end
 if not has_config("DISABLE_DYNAMIC") then
     target("squirrel")
         set_kind("shared")
-		add_files(squirrel_src)
+	add_files(squirrel_src)
+	if is_plat("windows") then
 		add_rules("utils.symbols.export_all", {export_classes = true})
+	end
         set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)")
 		add_includedirs("$(projectdir)/include","$(projectdir)/internal", "$(projectdir)/helpers",{public = true})
         if has_config("LONG_OUTPUT_NAMES") then
