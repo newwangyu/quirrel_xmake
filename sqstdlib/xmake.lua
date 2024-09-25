@@ -19,8 +19,10 @@ if not has_config("DISABLE_DYNAMIC") then
     target("sqstdlib")
         set_kind("shared")
         add_files(sqstdlib_src)
-		add_deps("squirrel")
+	add_deps("squirrel")
+	if is_plat("windows") then
 		add_rules("utils.symbols.export_all", {export_classes = true})
+	end
         set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)")
 		add_includedirs("$(projectdir)/include","$(projectdir)/internal", {public = true})
         if has_config("LONG_OUTPUT_NAMES") then
