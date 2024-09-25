@@ -10,9 +10,11 @@ local squirrel_src = {
 if not has_config("DISABLE_DYNAMIC") then
     target("sqmodules")
         set_kind("shared")
-		add_files(squirrel_src)
-		add_deps("squirrel","sqstdlib")
+	add_files(squirrel_src)
+	add_deps("squirrel","sqstdlib")
+	if is_plat("windows") then
 		add_rules("utils.symbols.export_all", {export_classes = true})
+	end
         set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)")
 		add_includedirs("$(projectdir)/include","$(projectdir)/sqmodules",  {public = true})
         if has_config("LONG_OUTPUT_NAMES") then
