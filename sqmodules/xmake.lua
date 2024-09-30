@@ -34,7 +34,7 @@ if not has_config("DISABLE_STATIC") then
 	target("sqmodules_static")
         set_kind("static")
 		add_files(squirrel_src)
-		add_deps("squirrel","sqstdlib_static")
+		add_deps("squirrel_static","sqstdlib_static")
         set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)")
 		add_includedirs("$(projectdir)/include","$(projectdir)/sqmodules", {public = true})
         if has_config("LONG_OUTPUT_NAMES") then
