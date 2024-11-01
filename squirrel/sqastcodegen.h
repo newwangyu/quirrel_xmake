@@ -49,7 +49,6 @@ private:
     void CheckDuplicateLocalIdentifier(Node *n, SQObject name, const SQChar *desc, bool ignore_global_consts);
     bool CheckMemberUniqueness(ArenaVector<Expr *> &vec, Expr *obj);
 
-    void Emit2ArgsOP(SQOpcode op, SQInteger p3 = 0);
     void EmitLoadConstInt(SQInteger value, SQInteger target);
     void EmitLoadConstFloat(SQFloat value, SQInteger target);
 
@@ -59,8 +58,6 @@ private:
     void EmitDerefOp(SQOpcode op);
 
     void generateTableDecl(TableDecl *tableDecl);
-
-    void checkClassKey(Expr *key);
 
     SQTable* GetScopedConstsTable();
 
@@ -72,9 +69,10 @@ private:
 
     void emitNewSlot(Expr *lvalue, Expr *rvalue);
     void emitAssign(Expr *lvalue, Expr * rvalue);
-    void emitFieldAssign(bool isLiteral);
+    void emitFieldAssign(int isLiteralIndex);
 
     bool CanBeDefaultDelegate(const SQChar *key);
+    bool CanBeDefaultTableDelegate(const SQChar *key);
     bool canBeLiteral(AccessExpr *expr);
 
     void MoveIfCurrentTargetIsLocal();

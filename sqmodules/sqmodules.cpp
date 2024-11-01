@@ -358,6 +358,10 @@ bool SqModules::requireModule(const char *requested_fn, bool must_exist, const c
   sq_pushstring(vm, __name__, -1);
   sq_rawset(vm, -3);
 
+  sq_pushstring(vm, "__static_analysis__", 19);
+  sq_pushbool(vm, compilationOptions.doStaticAnalysis);
+  sq_rawset(vm, -3);
+
   SQRAT_ASSERT(sq_gettop(vm) == prevTop+1); // bindings table
 
   bindBaseLib(hBindings);
@@ -394,10 +398,7 @@ bool SqModules::requireModule(const char *requested_fn, bool must_exist, const c
   runningScripts.emplace_back(resolvedFn.c_str());
 
   sq_pushobject(vm, scriptClosure.GetObject());
-  sq_newtable(vm);
-
-  SQRAT_ASSERT(sq_gettype(vm, -1) == OT_TABLE);
-  Sqrat::Object objThis = Sqrat::Var<Sqrat::Object>(vm, -1).value;
+  sq_pushnull(vm);
 
   SQRESULT callRes = sq_call(vm, 1, true, true);
 
@@ -425,7 +426,6 @@ bool SqModules::requireModule(const char *requested_fn, bool must_exist, const c
   module.exports = exports;
   module.fn = resolvedFn;
   module.stateStorage = stateStorage;
-  module.moduleThis = objThis;
   module.refHolder = refHolder;
   module.__name__ = __name__;
 

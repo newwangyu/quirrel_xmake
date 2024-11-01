@@ -7,6 +7,10 @@
 #define MAX_NATIVE_CALLS 100
 #define MIN_STACK_OVERHEAD 15
 
+// keep 256 stack slots reserved for locals and function arguments,
+// and another 256 slots for stack operations from native code
+#define STACK_GROW_THRESHOLD (256 * 2)
+
 #define SQ_SUSPEND_FLAG -666
 #define SQ_TAILCALL_FLAG -777
 #define DONT_FALL_BACK 666 // Non-zero value
@@ -59,11 +63,15 @@ public:
     SQVM(SQSharedState *ss);
     ~SQVM();
     bool Init(SQVM *friendvm, SQInteger stacksize);
+
+    template <bool debughookPresent>
     bool Execute(SQObjectPtr &func, SQInteger nargs, SQInteger stackbase, SQObjectPtr &outres, SQBool invoke_err_handler, ExecutionType et = ET_CALL);
+
     //starts a native call return when the NATIVE closure returns
     bool CallNative(SQNativeClosure *nclosure, SQInteger nargs, SQInteger newbase, SQObjectPtr &retval, SQInt32 target, bool &suspend,bool &tailcall);
     bool TailCall(SQClosure *closure, SQInteger firstparam, SQInteger nparams);
     //starts a SQUIRREL call in the same "Execution loop"
+    template <bool debughookPresent>
     bool StartCall(SQClosure *closure, SQInteger target, SQInteger nargs, SQInteger stackbase, bool tailcall);
     bool CreateClassInstance(SQClass *theclass, SQObjectPtr &inst, SQObjectPtr &constructor);
     //call a generic closure pure SQUIRREL or NATIVE
@@ -103,6 +111,7 @@ public:
     bool TypeOf(const SQObjectPtr &obj1, SQObjectPtr &dest);
     bool CallMetaMethod(SQObjectPtr &closure, SQMetaMethod mm, SQInteger nparams, SQObjectPtr &outres);
     bool ArithMetaMethod(SQInteger op, const SQObjectPtr &o1, const SQObjectPtr &o2, SQObjectPtr &dest);
+    template <bool debughookPresent>
     bool Return(SQInteger _arg0, SQInteger _arg1, SQObjectPtr &retval);
     //new stuff
     _SQ_INLINE bool ARITH_OP(SQUnsignedInteger op,SQObjectPtr &trg,const SQObjectPtr &o1,const SQObjectPtr &o2);
@@ -140,10 +149,6 @@ public:
     void Remove(SQInteger n);
 
     static bool IsFalse(const SQObjectPtr &o);
-    enum BooleanResult {BOOL_FALSE = 0, LEGACY_FALSE = 1, BOOL_TRUE = 2, LEGACY_TRUE = 3};
-    static BooleanResult ResolveBooleanResult(const SQObjectPtr &o);
-    static bool IsBooleanResultFalse(BooleanResult r){return r <= LEGACY_FALSE;}
-    static bool IsBooleanResultLegacy(BooleanResult r){return ((unsigned)r) & 1;}
 
     void Pop();
     void Pop(SQInteger n);

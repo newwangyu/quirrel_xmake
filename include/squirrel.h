@@ -74,10 +74,10 @@ namespace SQCompilation
 #include <stdio.h>
 
 #define SQUIRREL_VERSION_NUMBER_MAJOR 4
-#define SQUIRREL_VERSION_NUMBER_MINOR 6
-#define SQUIRREL_VERSION_NUMBER_PATCH 0
+#define SQUIRREL_VERSION_NUMBER_MINOR 7
+#define SQUIRREL_VERSION_NUMBER_PATCH 1
 
-#define SQUIRREL_VERSION    _SC("4.6.0")
+#define SQUIRREL_VERSION    _SC("4.7.1")
 #define SQUIRREL_COPYRIGHT  _SC("Copyright (C) 2003-2016 Alberto Demichelis; 2016-2022 Gaijin Entertainment")
 
 #define SQ_VMSTATE_IDLE         0
@@ -186,12 +186,18 @@ typedef struct tagSQStackInfos{
     SQInteger line;
 }SQStackInfos;
 
+typedef enum tagSQMessageSeverity{
+    SEV_HINT,
+    SEV_WARNING,
+    SEV_ERROR,
+}SQMessageSeverity;
+
 typedef struct SQVM* HSQUIRRELVM;
 typedef SQObject HSQOBJECT;
 typedef SQMemberHandle HSQMEMBERHANDLE;
 typedef SQInteger (*SQFUNCTION)(HSQUIRRELVM);
 typedef SQInteger (*SQRELEASEHOOK)(SQUserPointer,SQInteger size);
-typedef void (*SQCOMPILERERROR)(HSQUIRRELVM,const SQChar * /*desc*/,const SQChar * /*source*/,SQInteger /*line*/,SQInteger /*column*/, const SQChar * /*extra info*/);
+typedef void (*SQCOMPILERERROR)(HSQUIRRELVM,SQMessageSeverity /*severity*/,const SQChar * /*desc*/,const SQChar * /*source*/,SQInteger /*line*/,SQInteger /*column*/, const SQChar * /*extra info*/);
 typedef void (*SQPRINTFUNCTION)(HSQUIRRELVM,const SQChar * ,...);
 typedef void (*SQDEBUGHOOK)(HSQUIRRELVM /*v*/, SQInteger /*type*/, const SQChar * /*sourcename*/, SQInteger /*line*/, const SQChar * /*funcname*/);
 typedef SQInteger (*SQWRITEFUNC)(SQUserPointer,SQUserPointer,SQInteger);
@@ -379,7 +385,7 @@ SQUIRREL_API SQRESULT sq_clone(HSQUIRRELVM v,SQInteger idx);
 SQUIRREL_API SQRESULT sq_setfreevariable(HSQUIRRELVM v,SQInteger idx,SQUnsignedInteger nval);
 SQUIRREL_API SQRESULT sq_next(HSQUIRRELVM v,SQInteger idx);
 SQUIRREL_API SQRESULT sq_getweakrefval(HSQUIRRELVM v,SQInteger idx);
-SQUIRREL_API SQRESULT sq_clear(HSQUIRRELVM v,SQInteger idx);
+SQUIRREL_API SQRESULT sq_clear(HSQUIRRELVM v,SQInteger idx,SQBool freemem = SQTrue);
 SQUIRREL_API SQRESULT sq_freeze(HSQUIRRELVM v, SQInteger idx);
 SQUIRREL_API SQRESULT sq_freeze_inplace(HSQUIRRELVM v, SQInteger idx);
 

@@ -168,10 +168,10 @@ void Dump(OutputStream *stream, SQFunctionProto *func, bool deep)
         else {
             streamprintf(stream, _SC("[%03d] %15s %d %d %d %d"), (SQInt32)n, g_InstrDesc[inst.op].name, inst._arg0, inst._arg1, inst._arg2, inst._arg3);
             switch (inst.op) {
-            case _OP_JMP: case _OP_JCMP: case _OP_JZ: case _OP_AND: case _OP_OR: case _OP_PUSHTRAP: case _OP_FOREACH:
+            case _OP_JMP: case _OP_JCMP: case _OP_JZ: case _OP_AND: case _OP_OR: case _OP_PUSHTRAP: case _OP_FOREACH: case _OP_POSTFOREACH: case _OP_PREFOREACH:
                 streamprintf(stream, _SC("  jump to %d"), i + inst._arg1 + 1);
                 break;
-            case _OP_NULLCOALESCE: case _OP_POSTFOREACH:
+            case _OP_NULLCOALESCE:
                 streamprintf(stream, _SC("  jump to %d"), i + inst._arg1);
                 break;
             default:
@@ -388,13 +388,14 @@ void SQFuncState::AddParameter(const SQObject &name)
     _parameters.push_back(name);
 }
 
-void SQFuncState::AddLineInfos(SQInteger line,bool lineop,bool force)
+void SQFuncState::AddLineInfos(SQInteger line, bool lineop, bool force)
 {
     if(_lastline!=line || force){
-        SQLineInfo li;
-        li._line=line;li._op=(GetCurrentPos()+1);
-        if(lineop)AddInstruction(_OP_LINE,0,line);
         if(_lastline!=line) {
+            SQLineInfo li;
+            li._op = (GetCurrentPos()+1);
+            li._line = line;
+            li._is_line_op = lineop;
             _lineinfos.push_back(li);
         }
         _lastline=line;
@@ -408,7 +409,7 @@ void SQFuncState::DiscardTarget()
     if(size > 0 && _optimization){
         SQInstruction &pi = _instructions[size-1];//previous instruction
         switch(pi.op) {
-        case _OP_SET:case _OP_NEWSLOT:case _OP_SETOUTER:case _OP_CALL:case _OP_NULLCALL:
+        case _OP_SETI:case _OP_SETK:case _OP_SET:case _OP_NEWSLOTK:case _OP_NEWSLOT:case _OP_SETOUTER:case _OP_CALL:case _OP_NULLCALL:
             if(pi._arg0 == discardedtarget) {
                 pi._arg0 = 0xFF;
             }
@@ -431,7 +432,43 @@ void SQFuncState::AddInstruction(SQInstruction &i)
             }
             break;
         case _OP_SET:
+            if(i._arg0 == i._arg3) {
+                i._arg0 = 0xFF;
+            }
+            if( pi.op == _OP_LOAD && pi._arg0 == i._arg1 && (!IsLocal(pi._arg0))){
+                // arg1 is size of int
+                pi._arg2 = i._arg2;
+                pi.op = _OP_SETK;
+                pi._arg0 = i._arg0;
+                pi._arg3 = i._arg3;
+                return;
+            }
+            if( pi.op == _OP_LOADINT && pi._arg0 == i._arg1 && (!IsLocal(pi._arg0))){
+                pi._arg2 = i._arg2;
+                pi.op = _OP_SETI;
+                // arg1 is size of int
+                pi._arg0 = i._arg0;
+                pi._arg3 = i._arg3;
+                return;
+            }
+            break;
         case _OP_NEWSLOT:
+            if(i._arg0 == i._arg3) {
+                i._arg0 = 0xFF;
+            }
+            if( (pi.op == _OP_LOADINT || pi.op == _OP_LOAD) && pi._arg0 == i._arg1 && (!IsLocal(pi._arg0))){
+                // arg1 is size of int
+                pi._arg1 = pi.op == _OP_LOADINT ? GetNumericConstant((SQInteger)pi._arg1) : pi._arg1;
+                pi._arg0 = i._arg0;
+                pi._arg3 = i._arg3;
+                pi._arg2 = i._arg2;
+                pi.op = _OP_NEWSLOTK;
+                return;
+            }
+            break;
+        case _OP_SETI:
+        case _OP_SETK:
+        case _OP_NEWSLOTK:
             if(i._arg0 == i._arg3) {
                 i._arg0 = 0xFF;
             }
@@ -450,8 +487,19 @@ void SQFuncState::AddInstruction(SQInstruction &i)
             }
         break;
         case _OP_GET:
-            if( pi.op == _OP_LOAD && pi._arg0 == i._arg2 && (!IsLocal(pi._arg0))){
-                pi._arg2 = (unsigned char)i._arg1;
+            if( pi.op == _OP_LOAD && pi._arg0 == i._arg1 && (!IsLocal(pi._arg0))){
+                // arg1 is size of int
+                pi._arg2 = i._arg2;
+                pi.op = _OP_GETK;
+                pi._arg0 = i._arg0;
+                pi._arg3 = i._arg3;
+                return;
+            }
+            if( pi.op == _OP_LOADINT && pi._arg0 == i._arg1 && (!IsLocal(pi._arg0))){
+                // arg1 is size of int
+                // if (GetNumericConstant((SQInteger)pi._arg1) < 256)
+                pi._arg2 = i._arg2;
+                pi._arg1 = GetNumericConstant((SQInteger)pi._arg1);
                 pi.op = _OP_GETK;
                 pi._arg0 = i._arg0;
                 pi._arg3 = i._arg3;
@@ -487,7 +535,8 @@ void SQFuncState::AddInstruction(SQInstruction &i)
             break;
         case _OP_MOVE:
             switch(pi.op) {
-            case _OP_GET: case _OP_ADD: case _OP_SUB: case _OP_MUL: case _OP_DIV: case _OP_MOD: case _OP_BITW:
+            case _OP_GET: case _OP_GETK:
+            case _OP_ADD: case _OP_SUB: case _OP_MUL: case _OP_DIV: case _OP_MOD: case _OP_BITW:
             case _OP_LOADINT: case _OP_LOADFLOAT: case _OP_LOADBOOL: case _OP_LOAD:
 
                 if(pi._arg0 == i._arg1)
@@ -499,7 +548,7 @@ void SQFuncState::AddInstruction(SQInstruction &i)
                 }
             }
 
-            if(pi.op == _OP_MOVE)
+            if(pi.op == _OP_MOVE && i._arg1 < 256)
             {
                 pi.op = _OP_DMOVE;
                 pi._arg2 = i._arg0;
@@ -531,12 +580,6 @@ void SQFuncState::AddInstruction(SQInstruction &i)
                 pi._arg1 = pi._arg1 + 1;
                 pi.op = _OP_LOADNULLS; //-V1048
                 return;
-            }
-            break;
-        case _OP_LINE:
-            if(pi.op == _OP_LINE) {
-                _instructions.pop_back();
-                _lineinfos.pop_back();
             }
             break;
         }

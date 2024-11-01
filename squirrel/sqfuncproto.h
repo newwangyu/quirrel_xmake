@@ -21,13 +21,7 @@ enum SQLangFeature {
     LF_FORBID_GLOBAL_CONST_REWRITE = 0x000400,
     LF_FORBID_IMPLICIT_DEF_DELEGATE = 0x000800,
 
-    // runtime stage
-    LF_STRICT_BOOL = 0x010000,
-    LF_NO_PLUS_CONCAT = 0x020000,
-
-    LF_STRICT = LF_STRICT_BOOL |
-                LF_NO_PLUS_CONCAT |
-                LF_FORBID_ROOT_TABLE
+    LF_STRICT = LF_FORBID_ROOT_TABLE
 };
 
 struct SQOuterVar
@@ -71,7 +65,12 @@ struct SQLocalVarInfo
     bool _assignable;
 };
 
-struct SQLineInfo { int32_t _line; int32_t _op; };
+struct SQLineInfo
+{
+    int32_t _op;
+    unsigned _line: 31;
+    unsigned _is_line_op: 1;
+};
 
 typedef sqvector<SQOuterVar> SQOuterVarVec;
 typedef sqvector<SQLocalVarInfo> SQLocalVarInfoVec;
@@ -144,7 +143,7 @@ public:
     }
 
     const SQChar* GetLocal(SQVM *v,SQUnsignedInteger stackbase,SQUnsignedInteger nseq,SQUnsignedInteger nop);
-    SQInteger GetLine(SQInstruction *curr);
+    SQInteger GetLine(SQInstruction *curr, int *hint = nullptr, bool *is_line_op = nullptr);
     bool Save(SQVM *v,SQUserPointer up,SQWRITEFUNC write);
     static bool Load(SQVM *v,SQUserPointer up,SQREADFUNC read,SQObjectPtr &ret);
 #ifndef NO_GARBAGE_COLLECTOR

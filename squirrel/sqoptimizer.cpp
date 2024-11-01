@@ -94,7 +94,7 @@ void SQOptimizer::optimizeConstFolding()
 {
     SQInstructionVec & instr = fs->_instructions;
     bool changed = false;
-    for (int i = 0; i + 3 < instr.size(); i++) {
+    for (int i = 0; i + 2 < instr.size(); i++) {
         do {
             changed = false;
             if (i + 3 < instr.size()) {
@@ -145,9 +145,13 @@ void SQOptimizer::optimizeConstFolding()
                             }
 
                             if (applyOpt && res >= SQInteger(INT_MIN) && res <= SQInteger(INT_MAX)) {
-                                instr[i]._arg1 = (SQInt32)res;
-                                instr[i]._arg0 = operation._arg0;
-                                cutRange(i, 3, 1);
+                                const bool removeLocalVar = !isUnsafeRange(i, 3);
+                                const int targetInst = removeLocalVar ? i : i + 2;
+                                instr[targetInst]._arg1 = (SQInt32)res;
+                                instr[targetInst]._arg0 = operation._arg0;
+                                instr[targetInst].op = _OP_LOADINT;
+                                if (removeLocalVar)
+                                    cutRange(i, 3, 1);
                                 changed = true;
                                 codeChanged = true;
                                 #ifdef _DEBUG_DUMP
@@ -174,10 +178,13 @@ void SQOptimizer::optimizeConstFolding()
                             }
 
                             if (applyOpt) {
-                                instr[i].op = _OP_LOADFLOAT;
-                                instr[i]._arg1 = *((SQInt32*) &res);
-                                instr[i]._arg0 = operation._arg0;
-                                cutRange(i, 3, 1);
+                                const bool removeLocalVar = !isUnsafeRange(i, 3);
+                                const int targetInst = removeLocalVar ? i : i + 2;
+                                instr[targetInst].op = _OP_LOADFLOAT;
+                                instr[targetInst]._arg1 = *((SQInt32*) &res);
+                                instr[targetInst]._arg0 = operation._arg0;
+                                if (removeLocalVar)
+                                    cutRange(i, 3, 1);
                                 changed = true;
                                 codeChanged = true;
                                 #ifdef _DEBUG_DUMP
@@ -188,7 +195,67 @@ void SQOptimizer::optimizeConstFolding()
                     }
                 }
             }
-        } while (changed && i + 3 < instr.size());
+            if (i + 2 < instr.size()) {
+                SQInstruction & operation = instr[i + 1];
+                SQInstruction & loadA = instr[i];
+                int s = operation.op;
+
+                if (s == _OP_ADDI && (loadA.op == _OP_LOADINT || loadA.op == _OP_LOADFLOAT) && loadA._arg0 == operation._arg2){
+                    if (loadA.op == _OP_LOADINT) {
+                        SQInteger res = 0;
+                        SQInt32 lv = loadA._arg1;
+                        SQInt32 rv = operation._arg1;
+                        bool applyOpt = true;
+                        switch (s) { // -V785
+                            case _OP_ADDI: res = SQInteger(lv) + SQInteger(rv); break;
+                            default: applyOpt = false; break;
+                        }
+
+                        if (applyOpt && res >= SQInteger(INT_MIN) && res <= SQInteger(INT_MAX)) { // -V547
+                            const bool removeLocalVar = !isUnsafeRange(i, 2);
+                            const int targetInst = removeLocalVar ? i : i + 1;
+                            instr[targetInst].op = _OP_LOADINT;
+                            instr[targetInst]._arg1 = (SQInt32)res;
+                            instr[targetInst]._arg0 = operation._arg0;
+                            if (removeLocalVar)
+                                cutRange(i, 2, 1);
+                            changed = true;
+                            codeChanged = true;
+                            #ifdef _DEBUG_DUMP
+                                debugPrintInstructionPos(_SC("Const folding"), i);
+                            #endif
+                        }
+                    } else { // float
+                        assert(sizeof(SQFloat) == sizeof(SQInt32));
+                        SQFloat res = 0;
+                        SQFloat lv = *((SQFloat *) &loadA._arg1);
+                        SQFloat rv = SQFloat(operation._arg1);
+                        bool applyOpt = true;
+                        switch (s) { // -V785
+                            case _OP_ADDI: res = lv + rv; break;
+                            default: applyOpt = false; break;
+                        }
+
+                        if (applyOpt) { // -V547
+                            const bool removeLocalVar = !isUnsafeRange(i, 2);
+                            int targetInst = removeLocalVar ? i : i + 1;
+                            instr[targetInst].op = _OP_LOADFLOAT;
+                            instr[targetInst]._arg1 = *((SQInt32*) &res);
+                            instr[targetInst]._arg0 = operation._arg0;
+                            if (removeLocalVar)
+                                cutRange(i, 2, 1);
+                            changed = true;
+                            codeChanged = true;
+                            #ifdef _DEBUG_DUMP
+                                debugPrintInstructionPos(_SC("Const folding"), i);
+                            #endif
+                        }
+                    }
+                }
+
+            }
+
+        } while (changed && i + 2 < instr.size());
     }
 }
 
@@ -249,9 +316,10 @@ void SQOptimizer::optimize()
                 case _OP_OR:
                 case _OP_PUSHTRAP:
                 case _OP_FOREACH:
+                case _OP_PREFOREACH:
+                case _OP_POSTFOREACH:
                     jumps.push_back({i, i, i + instr[i]._arg1 + 1, i + instr[i]._arg1 + 1, false});
                     break;
-                case _OP_POSTFOREACH:
                 case _OP_NULLCOALESCE:
                     jumps.push_back({i, i, i + instr[i]._arg1, i + instr[i]._arg1, false});
                     break;

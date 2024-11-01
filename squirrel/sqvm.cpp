@@ -383,7 +383,7 @@ bool SQVM::TypeOf(const SQObjectPtr &obj1,SQObjectPtr &dest)
 
 bool SQVM::Init(SQVM *friendvm, SQInteger stacksize)
 {
-    _stack.resize(stacksize);
+    _stack.resize(stacksize + STACK_GROW_THRESHOLD);
     _alloccallsstacksize = 4;
     _callstackdata.resize(_alloccallsstacksize);
     _callsstacksize = 0;
@@ -409,6 +409,7 @@ bool SQVM::Init(SQVM *friendvm, SQInteger stacksize)
 }
 
 
+template <bool debughookPresent>
 bool SQVM::StartCall(SQClosure *closure,SQInteger target,SQInteger args,SQInteger stackbase,bool tailcall)
 {
     SQFunctionProto *func = closure->_function;
@@ -469,9 +470,11 @@ bool SQVM::StartCall(SQClosure *closure,SQInteger target,SQInteger args,SQIntege
     ci->_literals = func->_literals;
     ci->_ip       = func->_instructions;
     ci->_target   = (SQInt32)target;
-
-    if (_debughook) {
-        CallDebugHook(_SC('c'));
+    if constexpr (debughookPresent)
+    {
+        if (_debughook) {
+            CallDebugHook(_SC('c'));
+        }
     }
 
     if (closure->_function->_bgenerator) {
@@ -480,7 +483,7 @@ bool SQVM::StartCall(SQClosure *closure,SQInteger target,SQInteger args,SQIntege
         if(!gen->Yield(this,f->_stacksize))
             return false;
         SQObjectPtr temp;
-        Return(1, target, temp);
+        Return<debughookPresent>(1, target, temp);
         STK(target) = gen;
     }
 
@@ -488,14 +491,17 @@ bool SQVM::StartCall(SQClosure *closure,SQInteger target,SQInteger args,SQIntege
     return true;
 }
 
+template <bool debughookPresent>
 bool SQVM::Return(SQInteger _arg0, SQInteger _arg1, SQObjectPtr &retval)
 {
     SQBool    _isroot      = ci->_root;
     SQInteger callerbase   = _stackbase - ci->_prevstkbase;
-
-    if (_debughook) {
-        for(SQInteger i=0; i<ci->_ncalls; i++) {
-            CallDebugHook(_SC('r'));
+    if constexpr (debughookPresent)
+    {
+        if (_debughook) {
+            for(SQInteger i=0; i<ci->_ncalls; i++) {
+                CallDebugHook(_SC('r'));
+            }
         }
     }
 
@@ -748,29 +754,10 @@ bool SQVM::IsFalse(const SQObjectPtr &o)
     return false;
 }
 
-SQVM::BooleanResult SQVM::ResolveBooleanResult(const SQObjectPtr &o)
-{
-    if (sq_type(o) != OT_BOOL)
-      return IsFalse(o) ? LEGACY_FALSE : LEGACY_TRUE;
-    return (_integer(o) == 0) ? BOOL_FALSE : BOOL_TRUE;
-}
-
-#define VALIDATE_BOOLEAN_RESULT(r, o) {\
-    if ((_closure(ci->_closure)->_function->lang_features & LF_STRICT_BOOL) && IsBooleanResultLegacy(r)) { \
-        Raise_Error(_SC("Expression type is %s, not bool as expected"), GetTypeName((o))); \
-        SQ_THROW(); \
-    } \
-}
-
-#define VALIDATE_NOT_STRING(a, b) { \
-     if ((_closure(ci->_closure)->_function->lang_features & LF_NO_PLUS_CONCAT) && ((sq_type(a) | sq_type(b)) & _RT_STRING)) \
-     { \
-         Raise_Error(_SC("'+' cannot be applied to string")); \
-         SQ_THROW(); \
-     } \
-}
 
 extern SQInstructionDesc g_InstrDesc[];
+
+template <bool debughookPresent>
 bool SQVM::Execute(SQObjectPtr &closure, SQInteger nargs, SQInteger stackbase,SQObjectPtr &outres, SQBool invoke_err_handler,ExecutionType et)
 {
     ValidateThreadAccess();
@@ -794,7 +781,7 @@ bool SQVM::Execute(SQObjectPtr &closure, SQInteger nargs, SQInteger stackbase,SQ
     switch(et) {
         case ET_CALL: {
             temp_reg = closure;
-            if(!StartCall(_closure(temp_reg), _top - nargs, nargs, stackbase, false)) {
+            if(!StartCall<debughookPresent>(_closure(temp_reg), _top - nargs, nargs, stackbase, false)) {
                 //call the handler if there are no calls in the stack, if not relies on the previous node
                 if(ci == NULL) CallErrorHandler(_lasterror);
                 return false;
@@ -825,14 +812,33 @@ bool SQVM::Execute(SQObjectPtr &closure, SQInteger nargs, SQInteger stackbase,SQ
 exception_restore:
     //
     {
+        int prevLineNum = -1;
+        int lineHint = 0;
+        SQFunctionProto *funcProto;
+        if constexpr (debughookPresent)
+            funcProto = _closure(ci->_closure)->_function;
+
         for(;;)
         {
+            if constexpr (debughookPresent) {
+                if (_debughook) {
+                    SQFunctionProto *funcProto = _closure(ci->_closure)->_function;
+                    bool isLineOp;
+                    int curLineNum = funcProto->GetLine(ci->_ip, &lineHint, &isLineOp);
+                    if (curLineNum != prevLineNum) {
+                        prevLineNum = curLineNum;
+                        if (isLineOp)
+                            CallDebugHook(_SC('l'), curLineNum);
+                    }
+                }
+            }
+
             const SQInstruction &_i_ = *ci->_ip++;
             //dumpstack(_stackbase);
             //printf("\n[%d] %s %d %d %d %d\n",ci->_ip-_closure(ci->_closure)->_function->_instructions,g_InstrDesc[_i_.op].name,arg0,arg1,arg2,arg3);
             switch(_i_.op)
             {
-            case _OP_LINE: if (_debughook) CallDebugHook(_SC('l'),arg1); continue;
+            case _OP_DATA_NOP: continue;
             case _OP_LOAD: TARGET = ci->_literals[arg1]; continue;
             case _OP_LOADINT:
 #ifndef _SQ64
@@ -850,7 +856,7 @@ exception_restore:
                     SQInteger last_top = _top;
                     if(_openouters) CloseOuters(&(_stack._vals[_stackbase]));
                     for (SQInteger i = 0; i < arg3; i++) STK(i) = STK(arg2 + i);
-                    _GUARD(StartCall(_closure(clo), ci->_target, arg3, _stackbase, true));
+                    _GUARD(StartCall<debughookPresent>(_closure(clo), ci->_target, arg3, _stackbase, true));
                     if (last_top >= _top) {
                       _top = last_top;
                     }
@@ -865,7 +871,7 @@ exception_restore:
                     bool nullcall = (_i_.op == _OP_NULLCALL);
                     switch (sq_type(clo)) {
                     case OT_CLOSURE:
-                        _GUARD(StartCall(_closure(clo), tgt0, arg3, _stackbase+arg2, false));
+                        _GUARD(StartCall<debughookPresent>(_closure(clo), tgt0, arg3, _stackbase+arg2, false));
                         continue;
                     case OT_NATIVECLOSURE: {
                         bool suspend;
@@ -895,7 +901,7 @@ exception_restore:
                             case OT_CLOSURE:
                                 stkbase = _stackbase+arg2;
                                 _stack._vals[stkbase] = inst;
-                                _GUARD(StartCall(_closure(ctor), -1, arg3, stkbase, false));
+                                _GUARD(StartCall<debughookPresent>(_closure(ctor), -1, arg3, stkbase, false));
                                 break;
                             case OT_NATIVECLOSURE:
                                 bool dummy;
@@ -981,14 +987,15 @@ exception_restore:
             }
             case _OP_MOVE: TARGET = STK(arg1); continue;
             case _OP_NEWSLOT:
-                _GUARD(NewSlot(STK(arg1), STK(arg2), STK(arg3),false));
+            case _OP_NEWSLOTK:
+                _GUARD(NewSlot(STK(arg2), _i_.op == _OP_NEWSLOTK ? ci->_literals[arg1] : STK(arg1), STK(arg3),false));
                 if(arg0 != 0xFF) TARGET = STK(arg3);
                 continue;
             case _OP_DELETE: _GUARD(DeleteSlot(STK(arg1), STK(arg2), TARGET)); continue;
             case _OP_SET_LITERAL: {
                 uint64_t *__restrict hintP = ((uint64_t*__restrict )(ci->_ip++));
                 uint64_t hint = *hintP;
-                const SQObjectPtr &from = STK(arg1), &__restrict key = STK(arg2), &val = STK(arg3);
+                const SQObjectPtr &from = STK(arg2), &__restrict key = ci->_literals[arg1], &val = STK(arg3);
                 auto sqType = sq_type(from);
                 if (sqType == OT_INSTANCE && !(from._flags & SQOBJ_FLAG_IMMUTABLE))//for wrong access go to normal Set
                 {
@@ -1057,14 +1064,18 @@ exception_restore:
                 continue;
             }
             case _OP_SET:
-                if (!Set(STK(arg1), STK(arg2), STK(arg3),arg1)) { SQ_THROW(); }
+                if (!Set(STK(arg2), STK(arg1), STK(arg3),arg2)) { SQ_THROW(); }
+                if (arg0 != 0xFF) TARGET = STK(arg3);
+                continue;
+            case _OP_SETI: case _OP_SETK:
+                if (!Set(STK(arg2), _i_.op == _OP_SETI ? SQInteger(arg1) : ci->_literals[arg1], STK(arg3),arg2)) { SQ_THROW(); }
                 if (arg0 != 0xFF) TARGET = STK(arg3);
                 continue;
             case _OP_GET_LITERAL:{
                 uint64_t *__restrict hintP = ((uint64_t*__restrict )(ci->_ip++));
                 uint64_t hint = *hintP;
                 const SQUnsignedInteger getFlagsByOp = GET_FLAG_NO_DEF_DELEGATE;
-                const SQObjectPtr &__restrict from = STK(arg1), &__restrict key = STK(arg2);
+                const SQObjectPtr &__restrict from = STK(arg2), &__restrict key = ci->_literals[arg1];
                 auto sqType = sq_type(from);
 
                 //Or we can disallow table access by table.key
@@ -1146,7 +1157,7 @@ exception_restore:
                 if (arg3 & OP_GET_FLAG_TYPE_METHODS_ONLY)
                     getFlagsByOp |= GET_FLAG_TYPE_METHODS_ONLY;
                 if (arg3 & OP_GET_FLAG_NO_ERROR) {
-                    SQInteger fb = GetImpl(STK(arg1), STK(arg2), temp_reg, GET_FLAG_DO_NOT_RAISE_ERROR | getFlagsByOp, DONT_FALL_BACK);
+                    SQInteger fb = GetImpl(STK(arg2), STK(arg1), temp_reg, GET_FLAG_DO_NOT_RAISE_ERROR | getFlagsByOp, DONT_FALL_BACK);
                     if (fb == SLOT_RESOLVE_STATUS_OK) {
                         _Swap(TARGET,temp_reg);
                     } else if (fb == SLOT_RESOLVE_STATUS_ERROR) {
@@ -1155,7 +1166,7 @@ exception_restore:
                         TARGET.Null();
                     }
                 } else {
-                    if (!Get(STK(arg1), STK(arg2), temp_reg, getFlagsByOp, arg1)) {
+                    if (!Get(STK(arg2), STK(arg1), temp_reg, getFlagsByOp, arg2)) {
                         SQ_THROW();
                     }
                     _Swap(TARGET,temp_reg);//TARGET = temp_reg;
@@ -1173,9 +1184,9 @@ exception_restore:
                 TARGET = (!res)?true:false;
                 } continue;
             case _OP_ADD:
-              VALIDATE_NOT_STRING(STK(arg2), STK(arg1));
               _ARITH_(+,TARGET,STK(arg2),STK(arg1));
               continue;
+            case _OP_ADDI: {SQObjectPtr ai = (SQInteger)arg1; _ARITH_(+,TARGET,STK(arg2), ai); continue;}
             case _OP_SUB: _ARITH_(-,TARGET,STK(arg2),STK(arg1)); continue;
             case _OP_MUL: _ARITH_(*,TARGET,STK(arg2),STK(arg1)); continue;
             case _OP_DIV: _ARITH_NOZERO(/,TARGET,STK(arg2),STK(arg1)); continue;
@@ -1185,14 +1196,14 @@ exception_restore:
                 if((ci)->_generator) {
                     (ci)->_generator->Kill();
                 }
-                if(Return(arg0, arg1, temp_reg)){
+                if(Return<debughookPresent>(arg0, arg1, temp_reg)){
                     assert(traps==0);
                     //outres = temp_reg;
                     _Swap(outres,temp_reg);
                     return true;
                 }
                 continue;
-            case _OP_LOADNULLS:{ for(SQInt32 n=0; n < arg1; n++) STK(arg0+n).Null(); }continue;
+            case _OP_LOADNULLS:{ SQInt32 n=arg1-1; assert(n>=0); do { STK(arg0+n).Null(); } while (--n >= 0); }continue;
             case _OP_LOADROOT:
                 TARGET = _roottable;
                 continue;
@@ -1200,18 +1211,14 @@ exception_restore:
             case _OP_LOADCALLEE: TARGET = ci->_closure; continue;
             case _OP_DMOVE: STK(arg0) = STK(arg1); STK(arg2) = STK(arg3); continue;
             case _OP_JMP: ci->_ip += (sarg1); continue;
-            //case _OP_JNZ: if(!ResolveBooleanResult(STK(arg0))) ci->_ip+=(sarg1); continue;
+            //case _OP_JNZ: if(!IsFalse(STK(arg0))) ci->_ip+=(sarg1); continue;
             case _OP_JCMP: {
                 _GUARD(CMP_OP((CmpOP)arg3,STK(arg2),STK(arg0),temp_reg));
-                BooleanResult result = ResolveBooleanResult(temp_reg);
-                VALIDATE_BOOLEAN_RESULT(result, temp_reg);
-                if(IsBooleanResultFalse(result)) ci->_ip+=(sarg1);
+                if(IsFalse(temp_reg)) ci->_ip+=(sarg1);
                 }
                 continue;
             case _OP_JZ: {
-              BooleanResult result = ResolveBooleanResult(STK(arg0));
-              VALIDATE_BOOLEAN_RESULT(result, STK(arg0));
-              if(IsBooleanResultFalse(result)) ci->_ip+=(sarg1);
+              if(IsFalse(STK(arg0))) ci->_ip+=(sarg1);
             } continue;
             case _OP_GETOUTER: {
                 SQClosure *cur_cls = _closure(ci->_closure);
@@ -1267,14 +1274,14 @@ exception_restore:
                 }
                 _array(STK(arg0))->Append(val); continue;
                 }
-            case _OP_COMPARITH: {
+            case _OP_COMPARITH:
+            case _OP_COMPARITH_K: {
                 SQInteger selfidx = (((SQUnsignedInteger)arg1&0xFFFF0000)>>16);
-                _GUARD(DerefInc(arg3, TARGET, STK(selfidx), STK(arg2), STK(arg1&0x0000FFFF), false, selfidx));
+                _GUARD(DerefInc(arg3, TARGET, STK(selfidx), _i_.op == _OP_COMPARITH_K ? ci->_literals[arg2] : STK(arg2), STK(arg1&0x0000FFFF), false, selfidx));
                                 }
                 continue;
             case _OP_INC: {
                 SQObjectPtr o(sarg3);
-                VALIDATE_NOT_STRING(STK(arg2), o);
                 _GUARD(DerefInc('+',TARGET, STK(arg1), STK(arg2), o, false, arg1));
                 } continue;
             case _OP_INCL: {
@@ -1284,13 +1291,11 @@ exception_restore:
                 }
                 else {
                     SQObjectPtr o(sarg3); //_GUARD(LOCAL_INC('+',TARGET, STK(arg1), o));
-                    VALIDATE_NOT_STRING(a, o);
                     _ARITH_(+,a,a,o);
                 }
                            } continue;
             case _OP_PINC: {
                 SQObjectPtr o(sarg3);
-                VALIDATE_NOT_STRING(STK(arg2), o);
                 _GUARD(DerefInc('+',TARGET, STK(arg1), STK(arg2), o, true, arg1));
                 } continue;
             case _OP_PINCL: {
@@ -1301,7 +1306,6 @@ exception_restore:
                 }
                 else {
                     SQObjectPtr o(sarg3);
-                    VALIDATE_NOT_STRING(STK(arg1), o);
                     _GUARD(PLOCAL_INC('+',TARGET, STK(arg1), o));
                 }
 
@@ -1314,9 +1318,7 @@ exception_restore:
                 TARGET = (sq_type(STK(arg2)) == OT_INSTANCE) ? (_instance(STK(arg2))->InstanceOf(_class(STK(arg1)))?true:false) : false;
                 continue;
             case _OP_AND:{
-                BooleanResult result = ResolveBooleanResult(STK(arg2));
-                VALIDATE_BOOLEAN_RESULT(result, STK(arg2));
-                if(IsBooleanResultFalse(result)) {
+                if(IsFalse(STK(arg2))) {
                     TARGET = STK(arg2);
                     ci->_ip += (sarg1);
                 }
@@ -1324,9 +1326,7 @@ exception_restore:
                 }
                 continue;
             case _OP_OR:{
-                BooleanResult result = ResolveBooleanResult(STK(arg2));
-                VALIDATE_BOOLEAN_RESULT(result, STK(arg2));
-                if(!IsBooleanResultFalse(result)) {
+                if(!IsFalse(STK(arg2))) {
                     TARGET = STK(arg2);
                     ci->_ip += (sarg1);
                 }
@@ -1341,9 +1341,7 @@ exception_restore:
                 continue;
             case _OP_NEG: _GUARD(NEG_OP(TARGET,STK(arg1))); continue;
             case _OP_NOT:{
-                BooleanResult result = ResolveBooleanResult(STK(arg1));
-                VALIDATE_BOOLEAN_RESULT(result, STK(arg1));
-                TARGET = IsBooleanResultFalse(result);
+                TARGET = IsFalse(STK(arg1));
             } continue;
             case _OP_BWNOT:
                 if(sq_type(STK(arg1)) == OT_INTEGER) {
@@ -1368,7 +1366,7 @@ exception_restore:
                     if(sarg1 != MAX_FUNC_STACKSIZE) _Swap(STK(arg1),temp_reg);//STK(arg1) = temp_reg;
                 }
                 else { Raise_Error(_SC("trying to yield a '%s',only genenerator can be yielded"), GetTypeName(ci->_generator)); SQ_THROW();}
-                if(Return(arg0, arg1, temp_reg)){
+                if(Return<debughookPresent>(arg0, arg1, temp_reg)){
                     assert(traps == 0);
                     outres = temp_reg;
                     return true;
@@ -1381,15 +1379,35 @@ exception_restore:
                 _GUARD(_generator(STK(arg1))->Resume(this, TARGET));
                 traps += ci->_etraps;
                 continue;
-            case _OP_FOREACH:{ int tojump;
-                _GUARD(FOREACH_OP(STK(arg0),STK(arg2),STK(arg2+1),STK(arg2+2),arg2,sarg1,tojump));
-                ci->_ip += tojump; }
+            case _OP_PREFOREACH:{
+                STK(arg2).Null();STK(arg2+1).Null();STK(arg2+2).Null();
+                auto &arg0Stack = STK(arg0);
+                const bool isGenerator = sq_type(arg0Stack) == OT_GENERATOR;
+                int tojump;
+                _GUARD(FOREACH_OP(arg0Stack,STK(arg2),STK(arg2+1),STK(arg2+2),arg2,2,tojump));
+                if (tojump == 1)
+                    ci->_ip ++;
+                else if (tojump == 2) // empty
+                    ci->_ip += sarg1;
+                }
                 continue;
             case _OP_POSTFOREACH:
                 assert(sq_type(STK(arg0)) == OT_GENERATOR);
                 if(_generator(STK(arg0))->_state == SQGenerator::eDead)
-                    ci->_ip += (sarg1 - 1); // NOTE: worth to use the same way to encode displacements, fix some day
+                    ci->_ip += sarg1;
                 continue;
+            case _OP_FOREACH:{
+                const int jumpToBodyOffset = sarg1;
+                auto &arg0Stack = STK(arg0);
+                const bool isGenerator = sq_type(arg0Stack) == OT_GENERATOR;
+                if (isGenerator)
+                    ci->_ip += jumpToBodyOffset - 1;  // so generator will resume at postforeach
+                int tojump;
+                _GUARD(FOREACH_OP(arg0Stack,STK(arg2),STK(arg2+1),STK(arg2+2),arg2,2,tojump));
+                assert((tojump == 0 && isGenerator) || (tojump != 0 && !isGenerator));
+                if (tojump == 1)
+                    ci->_ip += jumpToBodyOffset;
+                }continue;
             case _OP_CLONE: _GUARD(Clone(STK(arg1), TARGET)); continue;
             case _OP_TYPEOF: _GUARD(TypeOf(STK(arg1), TARGET)) continue;
             case _OP_PUSHTRAP:{
@@ -1638,7 +1656,7 @@ bool SQVM::TailCall(SQClosure *closure, SQInteger parambase,SQInteger nparams)
         return false;
     }
     for (SQInteger i = 0; i < nparams; i++) STK(i) = STK(parambase + i);
-    bool ret = StartCall(closure, ci->_target, nparams, _stackbase, true);
+    bool ret = StartCall<true>(closure, ci->_target, nparams, _stackbase, true);
     if (last_top >= _top) {
         _top = last_top;
     }
@@ -2073,7 +2091,9 @@ bool SQVM::Call(SQObjectPtr &closure,SQInteger nparams,SQInteger stackbase,SQObj
 {
     switch(sq_type(closure)) {
     case OT_CLOSURE:
-        return Execute(closure, nparams, stackbase, outres, invoke_err_handler);
+        return _debughook ?
+            Execute<true>(closure, nparams, stackbase, outres, invoke_err_handler) :
+            Execute<false>(closure, nparams, stackbase, outres, invoke_err_handler);
     case OT_NATIVECLOSURE:{
         bool dummy;
         return CallNative(_nativeclosure(closure), nparams, stackbase, outres, -1, dummy, dummy);
@@ -2153,13 +2173,18 @@ bool SQVM::EnterFrame(SQInteger newbase, SQInteger newtop, bool tailcall)
 
     _stackbase = newbase;
     _top = newtop;
-    if(newtop + MIN_STACK_OVERHEAD > (SQInteger)_stack.size()) {
-        if(_nmetamethodscall) {
-            Raise_Error(_SC("stack overflow, cannot resize stack while in a metamethod"));
+
+    if(newtop + STACK_GROW_THRESHOLD > (SQInteger)_stack.size()) {
+        if(!_nmetamethodscall) {
+            _stack.resize(newtop + (STACK_GROW_THRESHOLD << 1));
+            RelocateOuters();
+        }
+        // TODO: this exception should never occur and will be removed soon
+        else if(newtop + MIN_STACK_OVERHEAD > (SQInteger)_stack.size()) {
+            Raise_Error(_SC("stack overflow, cannot resize stack while in a metamethod, stack.size = %d, required = %d"),
+                int(_stack.size()), int(newtop + MIN_STACK_OVERHEAD));
             return false;
         }
-        _stack.resize(newtop + (MIN_STACK_OVERHEAD << 2));
-        RelocateOuters();
     }
     return true;
 }
